@@ -1,0 +1,15 @@
+[package]
+name = "bitfinex-scraper"
+version = "0.1.0"
+authors = ["sebasv <mail@sebastiaanvermeulen.nl>"]
+edition = "2018"
+
+[dependencies]
+ws = {version = "*", features = ["ssl"]} 
+serde = "*"
+serde_json = "*"
+serde_derive = "*"
+ctrlc ="*"
+log = "*"
+simplelog = "*"
+clap = "*"
