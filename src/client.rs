@@ -4,25 +4,22 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub type Alive = Arc<AtomicBool>;
 
-// Our Handler struct.
-// Here we explicity indicate that the Client needs a Sender,
-// whereas a closure captures the Sender for us automatically.
 pub struct Client {
     out: ws::Sender,
     alive: Alive,
     pairs: Vec<String>,
     path: PathBuf,
     subscribers: HashMap<usize, SubscriberHandler>,
+    last_ping: Instant,
 }
 
 impl ws::Handler for Client {
     fn on_open(&mut self, _: ws::Handshake) -> ws::Result<()> {
         println!("client opened");
-        // Now we don't need to call unwrap since `on_open` returns a `Result<()>`.
-        // If this call fails, it will only result in this connection disconnecting.
         for pair in self.pairs.iter() {
             self.out.send(
                 json!({"event":"subscribe", "channel": "trades", "symbol": pair}).to_string(),
@@ -36,23 +33,43 @@ impl ws::Handler for Client {
             ws::Message::Text(s) => self.handle_message(&s),
             ws::Message::Binary(_) => { /* ignore binary data */ }
         };
-        let alive = self.alive.load(Ordering::Relaxed);
-        if !alive {
-            self.close()
-        } else {
-            Ok(())
+
+        if Instant::now() - self.last_ping > Duration::from_secs(300) {
+            // ping every 5 minutes to try and keep the session fresh
+            self.out
+                .send(json!({"event":"ping", "cid":1234}).to_string())?;
+            self.last_ping = Instant::now();
         }
+
+        self.check_close()
+    }
+
+    fn on_timeout(&mut self, _event: ws::util::Token) -> ws::Result<()> {
+        warn!("timeout on websocket connection");
+        self.check_close()
     }
 }
 
 impl Client {
     pub fn new(pairs: Vec<String>, path: PathBuf, out: ws::Sender, alive: Alive) -> Client {
-        Client {
+        let client = Client {
             pairs,
             path,
             subscribers: HashMap::new(),
             out,
             alive,
+            last_ping: Instant::now(),
+        };
+        client.out.timeout(10_000, ws::util::Token(1234)).unwrap();
+        client
+    }
+
+    fn check_close(&mut self) -> ws::Result<()> {
+        let alive = self.alive.load(Ordering::Relaxed);
+        if !alive {
+            self.close()
+        } else {
+            Ok(())
         }
     }
 
@@ -68,10 +85,12 @@ impl Client {
     fn handle_message(&mut self, s: &str) {
         if let Some(msg) = Message::try_new(&s) {
             match msg {
-                Message::Subscribed { channel, id, .. } => {
+                Message::Subscribed {
+                    channel, pair, id, ..
+                } => {
                     let subscriber = Subscriber::spawn(
                         self.path
-                            .join(format!("{}.{}.csv", channel, id))
+                            .join(format!("{}.{}.{}.csv", channel, pair, id))
                             .to_path_buf(),
                     );
                     self.subscribers.insert(id, subscriber);
@@ -87,9 +106,10 @@ impl Client {
                 Message::Update(id, _, update) => {
                     self.subscribers.entry(id).and_modify(|s| s.send(update));
                 }
-                Message::Info { .. } => info!("info message"),
+                Message::Info { .. } => info!("info message: {:?}", msg),
                 Message::HeartBeat(id, _) => info!("heartbeat for {}", id),
                 Message::Error { msg, .. } => error!("received error: {}", msg),
+                Message::Pong { .. } => info!("server ponged"),
             }
         }
     }

@@ -21,6 +21,8 @@ pub enum Message {
         channel: String,
         #[serde(rename = "chanId")]
         id: usize,
+        symbol: String,
+        pair: String,
     },
     Unsubscribed {
         event: String,
@@ -33,7 +35,11 @@ pub enum Message {
         msg: String,
         code: i32,
     },
-
+    Pong {
+        event: String, //"pong",
+        ts: u64,       //1511545528111,
+        cid: u32,      //1234
+    },
     // [
     //     CHANNEL_ID,
     //     [
